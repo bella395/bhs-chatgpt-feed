@@ -1,0 +1,32 @@
+name: Diagnose label fetch
+on: workflow_dispatch
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: curl
+        run: |
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+          for u in https://buyheatshrink.com/heatshrinktubing/heat-shrink-kits-splices-and-end-caps/heat-shrink-end-cap https://buyheatshrink.com/; do
+            echo "== $u"
+            curl -sS -o body.html -D headers.txt -w "code=%{http_code} size=%{size_download} time=%{time_total}\n" -A "$UA" "$u" || echo "curl exit $?"
+            grep -iE '^(HTTP|server|cf-|x-|location|content-type|set-cookie: (__cf|incap|visid))' headers.txt || true
+            echo "selects: $(grep -c '<select' body.html || true)"
+            head -c 400 body.html | tr '\n' ' '; echo
+          done
+          echo "runner ip: $(curl -s https://api.ipify.org)"
+      - name: pwsh
+        shell: pwsh
+        run: |
+          $ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+          $u = 'https://buyheatshrink.com/heatshrinktubing/heat-shrink-kits-splices-and-end-caps/heat-shrink-end-cap'
+          try {
+            $r = Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 20 -UserAgent $ua
+            "status=$($r.StatusCode) rawlen=$($r.RawContentStream.Length)"
+            $html = [Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray())
+            "selects=$(([regex]::Matches($html, '<select')).Count)"
+          } catch {
+            "ERR type=$($_.Exception.GetType().FullName)"
+            "msg=$($_.Exception.Message)"
+            try { "status=$([int]$_.Exception.Response.StatusCode)" } catch { }
+          }
