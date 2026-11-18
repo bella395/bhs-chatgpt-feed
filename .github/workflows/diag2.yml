@@ -1,0 +1,30 @@
+name: Diagnose label parse
+on: workflow_dispatch
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: pwsh functions
+        shell: pwsh
+        run: |
+          "ps=$($PSVersionTable.PSVersion)"
+          . ./lib/FeedTransform.ps1; . ./lib/VariantLabels.ps1
+          $ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+          foreach ($u in @('https://buyheatshrink.com/aerospace-grade-fire-sleevings','https://buyheatshrink.com/heatshrinktubing/heat-shrink-kits-splices-and-end-caps/heat-shrink-end-cap')) {
+            "== $u"
+            try {
+              $resp = Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 20 -UserAgent $ua
+              "status=$($resp.StatusCode) type=$($resp.GetType().FullName) enc=$($resp.Headers['Content-Encoding'])"
+              $bytes = $resp.RawContentStream.ToArray()
+              "rawbytes=$($bytes.Length) first=$([BitConverter]::ToString($bytes[0..7]))"
+              $html = [Text.Encoding]::UTF8.GetString($bytes)
+              "htmllen=$($html.Length) contentlen=$($resp.Content.Length) selectTags=$(([regex]::Matches($html,'(?i)<select\b')).Count) contentSelects=$(([regex]::Matches($resp.Content,'(?i)<select\b')).Count)"
+              $p = Get-OptionLabels $html
+              "parsed.count=$($p.Count) keys=$(@($p.Keys) -join ',')"
+              $p2 = Get-OptionLabels $resp.Content
+              "parsedFromContent.count=$($p2.Count)"
+            } catch { "ERR $($_.Exception.GetType().FullName): $($_.Exception.Message)"; $_.ScriptStackTrace }
+            $r = Get-ParentLabels @($u) 0 60
+            "Get-ParentLabels null=$($null -eq $r[$u])"
+          }
