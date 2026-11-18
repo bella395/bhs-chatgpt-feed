@@ -54,7 +54,7 @@ if (-not $SkipLabels -and $multi.Count -gt 0) {
     $labels = Get-ParentLabels $multi 1000 480
     $failedUrls = @($multi | Where-Object { $null -eq $labels[$_] })
     $failed = $failedUrls.Count
-    foreach ($fu in $failedUrls) { Write-Host "label fetch failed (parent page): $fu" }
+    foreach ($fu in $failedUrls) { Write-Host "label fetch failed (parent page): $fu - $($script:LabelFailReasons[$fu])" }
 
     $skipped = $script:LabelPagesSkipped
 }
