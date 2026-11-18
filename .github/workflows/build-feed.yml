@@ -1,0 +1,49 @@
+name: Build ChatGPT feed
+
+on:
+  schedule:
+    - cron: '17 11 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-feed
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Run tests
+        run: pwsh -NoProfile -File tests/run-tests.ps1
+
+      - name: Build feed
+        env:
+          GDF_FEED_URL: ${{ secrets.GDF_FEED_URL }}
+        run: pwsh -NoProfile -File build-feed.ps1
+
+      - name: Commit feed
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add products.jsonl products.csv last-run.json .nojekyll
+          git commit -m "Feed refresh $(date -u +%F)"
+          git push
+
+      - name: Check grouping health
+        shell: bash
+        run: |
+          failed=$(jq '.label_pages_failed' last-run.json)
+          grouped=$(jq '.items_grouped' last-run.json)
+          skipped=$(jq '.label_pages_skipped // 0' last-run.json)
+          echo "label_pages_failed=$failed label_pages_skipped=$skipped items_grouped=$grouped"
+          if [ "$failed" -gt 10 ] || [ "$grouped" -lt 1000 ]; then
+            echo "Grouping health check failed (feed was already published)."
+            exit 1
+          fi
