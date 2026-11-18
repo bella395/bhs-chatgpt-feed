@@ -67,39 +67,54 @@ function Get-AttributeDisplayName {
 
 function Get-ParentLabels {
     # Returns url -> labels hashtable (or $null when not fetched / failed). Stops fetching when the
-    # time budget is spent or after $MaxConsecutiveFailures failed parents in a row.
-    param([string[]]$ParentUrls, [int]$DelayMs = 1000, [int]$BudgetSec = 480)
+    # time budget is spent or after $MaxConsecutiveFailures failed parents in a row. Each page gets up to
+    # 2 attempts (an exception or a page with no option lists both count as a failed attempt).
+    # $Fetch (optional) is called as & $Fetch $url and returns the HTML string or throws.
+    # Failure reasons land in $script:LabelFailReasons (url -> string).
+    param([string[]]$ParentUrls, [int]$DelayMs = 1000, [int]$BudgetSec = 480, [scriptblock]$Fetch = $null)
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+    if ($null -eq $Fetch) {
+        $Fetch = {
+            param($pageUrl)
+            $resp = Invoke-WebRequest -Uri $pageUrl -UseBasicParsing -TimeoutSec 20 -UserAgent $ua
+            return [Text.Encoding]::UTF8.GetString($resp.RawContentStream.ToArray())
+        }
+    }
     $MaxConsecutiveFailures = 6
     $out = @{}
     $first = $true
     $consecutive = 0
     $script:LabelPagesSkipped = 0
+    $script:LabelFailReasons = @{}
     $sw = [Diagnostics.Stopwatch]::StartNew()
     foreach ($url in $ParentUrls) {
         if ($sw.Elapsed.TotalSeconds -ge $BudgetSec -or $consecutive -ge $MaxConsecutiveFailures) {
             $out[$url] = $null
             $script:LabelPagesSkipped++
+            $script:LabelFailReasons[$url] = 'skipped'
             continue
         }
         if (-not $first -and $DelayMs -gt 0) { Start-Sleep -Milliseconds $DelayMs }
         $first = $false
         $labels = $null
+        $reason = ''
         for ($attempt = 1; $attempt -le 2; $attempt++) {
-            $threw = $false
             try {
-                $resp = Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 20 -UserAgent $ua
-                $html = [Text.Encoding]::UTF8.GetString($resp.RawContentStream.ToArray())
+                $html = [string](& $Fetch $url)
                 $parsed = Get-OptionLabels $html
-                if ($parsed.Count -gt 0) { $labels = $parsed }
+                if ($parsed.Count -gt 0) { $labels = $parsed } else { $reason = 'no option lists (' + $html.Length + ' chars)' }
             } catch {
-                $threw = $true
+                $reason = $_.Exception.GetType().Name
+                try {
+                    $sc = $_.Exception.Response.StatusCode
+                    if ($null -ne $sc) { $reason += ' HTTP ' + [int]$sc }
+                } catch { }
             }
-            if ($null -ne $labels -or -not $threw) { break }
-            if ($attempt -lt 2 -and $DelayMs -gt 0) { Start-Sleep -Milliseconds $DelayMs }
+            if ($null -ne $labels) { break }
+            if ($attempt -lt 2 -and $DelayMs -gt 0) { Start-Sleep -Milliseconds (2 * $DelayMs) }
         }
-        if ($null -eq $labels) { $consecutive++ } else { $consecutive = 0 }
+        if ($null -eq $labels) { $consecutive++; $script:LabelFailReasons[$url] = $reason } else { $consecutive = 0 }
         $out[$url] = $labels
     }
     return $out
