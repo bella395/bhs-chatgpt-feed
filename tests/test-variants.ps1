@@ -90,3 +90,25 @@ Assert-Eq 'consecutive failures: all 8 values null' @($u8 | Where-Object { $null
 $ob = Get-OptionLabels '<select data-value="size"><option value="91" data-value="5">1/4"</option></select>'
 Assert-Eq 'option regex: ignores data-value attr' $ob['size']['91'] '1/4"'
 Assert-True 'option regex: data-value not used as key' (-not $ob['size'].ContainsKey('5'))
+
+# label-fetch hardening: injectable fetcher, retry on empty pages, failure reasons
+$pageCutHtml = [IO.File]::ReadAllText("$PSScriptRoot/fixtures/page-cut.html", [Text.Encoding]::UTF8)
+$script:FetchCalls = 0
+$fetchRetry = { param($u) $script:FetchCalls++; if ($script:FetchCalls -eq 1) { '<html></html>' } else { $pageCutHtml } }
+$rr = Get-ParentLabels @('u1') 0 480 $fetchRetry
+Assert-True 'fetch: zero-selects then labels -> retried, labels kept' ($null -ne $rr['u1'] -and $script:FetchCalls -eq 2)
+
+$fetchEmpty = { param($u) '<html></html>' }
+$re = Get-ParentLabels @('u1') 0 480 $fetchEmpty
+Assert-True 'fetch: zero-selects twice -> null with reason' ($null -eq $re['u1'] -and ([string]$script:LabelFailReasons['u1']).StartsWith('no option lists'))
+
+$fetchThrow = { param($u) throw (New-Object System.Net.WebException 'x') }
+$rt = Get-ParentLabels @('u1') 0 480 $fetchThrow
+Assert-True 'fetch: throws twice -> null with exception reason' ($null -eq $rt['u1'] -and ([string]$script:LabelFailReasons['u1']).StartsWith('WebException'))
+
+$script:FetchCalls = 0
+$fetchCount = { param($u) $script:FetchCalls++; '<html></html>' }
+$u8c = @(1..8 | ForEach-Object { "u$_" })
+$rc = Get-ParentLabels $u8c 0 480 $fetchCount
+$first6 = @(1..6 | Where-Object { ([string]$script:LabelFailReasons["u$_"]).StartsWith('no option lists') }).Count
+Assert-True 'fetch: consecutive stop marks rest skipped' ($first6 -eq 6 -and $script:LabelFailReasons['u7'] -eq 'skipped' -and $script:LabelFailReasons['u8'] -eq 'skipped' -and $script:FetchCalls -eq 12)
